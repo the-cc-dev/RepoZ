@@ -28,7 +28,11 @@ namespace TinySoup
 
         public Task<IList<AvailableVersion>> CheckForUpdatesAsync(UpdateRequest request) => CheckForUpdatesAsync(request, new DefaultVersionComparer());
 
+#if NET40
+        public Task<IList<AvailableVersion>> CheckForUpdatesAsync(UpdateRequest request, IComparer<Version> versionComparer)
+#else
         public async Task<IList<AvailableVersion>> CheckForUpdatesAsync(UpdateRequest request, IComparer<Version> versionComparer)
+#endif
         {
             var parameters = new ServiceParameterCollection
             {
@@ -40,12 +44,23 @@ namespace TinySoup
                 { "vol", Uri.EscapeDataString(request.FreeText ?? "") }
             };
 
-            var versions = await PutAsync(parameters.ToString());
+            IList<AvailableVersion> versions;
+#if NET40
+            versions = PutAsync(parameters.ToString()).Result;
+#else
+            versions = await PutAsync(parameters.ToString());
+#endif
 
-            return versions
+            var result = versions
                 .Where(v => versionComparer.Compare(v.Version, request.CurrentVersionInUse) > 0)
                 .OrderByDescending(v => v.Version, versionComparer)
                 .ToList();
+
+#if NET40
+            return new TaskCompletionSource<IList<AvailableVersion>>(result).Task;
+#else
+            return result;
+#endif
         }
 
         public WebSoupClient WithExceptionHandler(Action<Exception> exceptionHandler)
@@ -70,7 +85,11 @@ namespace TinySoup
             return CallWebServiceAsync(method, parameters.ToString());
         }
 
+#if NET40
+        internal Task<IList<AvailableVersion>> CallWebServiceAsync(string method, string parameterString)
+#else
         internal async Task<IList<AvailableVersion>> CallWebServiceAsync(string method, string parameterString)
+#endif
         {
             HttpClient client;
 
@@ -99,12 +118,22 @@ namespace TinySoup
                     client = new HttpClient(handler: httpClientHandler, disposeHandler: true);
                 }
 
-                return serializer.ReadObject(await client.GetStreamAsync(uri).ConfigureAwait(false)) as List<AvailableVersion>;
+#if NET40
+                var stream = client.GetStreamAsync(uri).Result;
+                return new TaskCompletionSource<IList<AvailableVersion>>(serializer.ReadObject(stream) as List<AvailableVersion>).Task;
+#else
+                var stream = await client.GetStreamAsync(uri).ConfigureAwait(false);
+                return serializer.ReadObject(stream) as List<AvailableVersion>;
+#endif
             }
             catch (Exception ex)
             {
                 _exceptionHandler?.Invoke(ex);
+#if NET40
+                return new TaskCompletionSource<IList<AvailableVersion>>(new List<AvailableVersion>()).Task;
+#else
                 return await Task.FromResult(new List<AvailableVersion>()).ConfigureAwait(false);
+#endif
             }
         }
 
@@ -112,7 +141,7 @@ namespace TinySoup
         {
             if (version == null)
                 version = new Version(0, 0, 0, 0);
-            
+
             int NotNegative(int value) => Math.Max(value, 0);
 
             // Mono's Version.ToString(4) skips zeros, lets format this manually
@@ -134,6 +163,11 @@ namespace TinySoup.Identifier
 
     public class AnonymousClientIdentifier : IClientIdentifier
     {
+        public AnonymousClientIdentifier(IPlatformIdentifier platformIdentifier)
+        {
+            PlatformIdentifier = platformIdentifier ?? throw new ArgumentNullException(nameof(platformIdentifier));
+        }
+
         public override string ToString()
         {
             var id = "";
@@ -164,18 +198,15 @@ namespace TinySoup.Identifier
 
         protected virtual string GetPlatformConfigPath()
         {
-            switch (Environment.OSVersion.Platform)
+            switch (PlatformIdentifier.Platform)
             {
-                case PlatformID.Win32S:
-                case PlatformID.Win32Windows:
-                case PlatformID.Win32NT:
-                case PlatformID.WinCE:
+                case Platform.Windows:
                     // AppData Roaming
                     var appDataPath = Environment.GetEnvironmentVariable("AppData");
                     return appDataPath ?? throw new PlatformNotSupportedException(nameof(AnonymousClientIdentifier) + " cannot be used with UWP. Derive a custom identifer from it and handle the file IO in UWP manner.");
 
-                case PlatformID.Unix:
-                case PlatformID.MacOSX:
+                case Platform.MacOS:
+                case Platform.Unix:
                     // macOS: /Users/USERNAME/.config
                     // Linux: /home/USERNAME/.config
                     var homePath = Environment.GetEnvironmentVariable("HOME");
@@ -190,6 +221,8 @@ namespace TinySoup.Identifier
         protected virtual string ReadId(string file) => File.ReadAllText(file, Encoding.UTF8);
 
         protected virtual void WriteId(string file, string id) => File.WriteAllText(file, id, Encoding.UTF8);
+
+        public IPlatformIdentifier PlatformIdentifier { get; }
     }
 }
 
@@ -274,7 +307,7 @@ namespace TinySoup.Model
         [IgnoreDataMember]
         public Version Version
         {
-            get => _version ?? new Version();
+            get => _version ?? new Version(0, 0);
         }
 
         [DataMember(Name = "VersionString")]
@@ -315,7 +348,6 @@ namespace TinySoup.Model
 
             return this;
         }
-
         public UpdateRequest WithNameAndVersionFromEntryAssembly() => WithNameAndVersionFromAssembly(Assembly.GetEntryAssembly());
 
         public UpdateRequest WithNameAndVersionFromExecutingAssembly() => WithNameAndVersionFromAssembly(Assembly.GetExecutingAssembly());
@@ -328,7 +360,13 @@ namespace TinySoup.Model
             return this;
         }
 
-        public UpdateRequest AsAnonymousClient() => WithClientIdentifier(new AnonymousClientIdentifier());
+        public UpdateRequest AsAnonymousClient()
+        {
+            if (PlatformIdentifier == null)
+                throw new NullReferenceException($"Please call {nameof(OnPlatform)} before {nameof(AsAnonymousClient)}!");
+
+            return WithClientIdentifier(new AnonymousClientIdentifier(PlatformIdentifier));
+        }
 
         public UpdateRequest OnChannel(string channel)
         {
@@ -369,33 +407,30 @@ namespace TinySoup.Model
 
     public interface IPlatformIdentifier
     {
+        Platform Platform { get; }
+
+        string NameAndVersion { get; }
+    }
+
+    public enum Platform
+    {
+        Windows,
+        MacOS,
+        Unix
     }
 
     public class OperatingSystemIdentifier : IPlatformIdentifier
     {
-        public override string ToString()
+        public OperatingSystemIdentifier(Platform platform, string nameAndVersion)
         {
-            var platformName = Environment.OSVersion.ToString();
-            var prefix = string.IsNullOrWhiteSpace(Prefix) ? "" : Prefix;
-            var suffix = string.IsNullOrWhiteSpace(Suffix) ? "" : Suffix;
-
-            return $"{prefix} {platformName} {suffix}".Trim();
+            Platform = platform;
+            NameAndVersion = nameAndVersion;
         }
 
-        public string Prefix { get; set; }
+        public override string ToString() => NameAndVersion;
 
-        public string Suffix { get; set; }
+        public Platform Platform { get; }
 
-        public OperatingSystemIdentifier WithPrefix(string prefix)
-        {
-            Prefix = prefix;
-            return this;
-        }
-
-        public OperatingSystemIdentifier WithSuffix(string suffix)
-        {
-            Suffix = suffix;
-            return this;
-        }
+        public string NameAndVersion { get; }
     }
 }
