@@ -107,9 +107,9 @@ namespace RepoZ.UI.Mac.Story
             var request = new UpdateRequest()
                 .WithNameAndVersionFromEntryAssembly()
                 .WithVersion(bundleVersion)
-                .AsAnonymousClient()
+                .OnPlatform(new OperatingSystemIdentifier(Platform.MacOS, Environment.OSVersion + " (Mac)"))
                 .OnChannel("stable")
-                .OnPlatform(new OperatingSystemIdentifier().WithSuffix("(Mac)"));
+                .AsAnonymousClient();
 
             var client = new WebSoupClient();
             var updates = await client.CheckForUpdatesAsync(request);
