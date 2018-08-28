@@ -128,9 +128,9 @@ namespace RepoZ.UI.Win.Wpf
 		{
 			var request = new UpdateRequest()
 				.WithNameAndVersionFromEntryAssembly()
+				.OnPlatform(new OperatingSystemIdentifier(Platform.Windows, Environment.OSVersion.ToString() + "(WPF)"))
 				.AsAnonymousClient()
-				.OnChannel("stable")
-				.OnPlatform(new OperatingSystemIdentifier().WithSuffix("(WPF)"));
+				.OnChannel("stable");
 
 			var client = new WebSoupClient();
 			var updates = await client.CheckForUpdatesAsync(request);
