@@ -70,26 +70,46 @@ namespace grr
 			}
 		}
 
-		public static void WriteConsoleInput(Process target, string value, int waitMilliseconds = 0)
-		{
-			if (target.Id == Process.GetCurrentProcess().Id)
-				target = ParentProcessUtilities.GetParentProcess(target.Id);
+        public static void WriteConsoleInput(Process target, string value, int waitMilliseconds = 0)
+        {
+            // TODO
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                target = Process.GetCurrentProcess();
+            }
+            else
+            {
+                if (target.Id == Process.GetCurrentProcess().Id)
+                    target = ParentProcessUtilities.GetParentProcess(target.Id);
+            }
 
-			// append ENTER key
-			var arguments = (value + "{Enter}")
-				.Replace("\"", "'"); // escape " with \" so that SendKeys.exe can unescape them again
+            // append ENTER key
+            var arguments = (value + "{Enter}")
+                .Replace("\"", "'"); // escape " with \" so that SendKeys.exe can unescape them again
 
-			arguments = $"-pid:{target.Id} \"{arguments}\"";
+            arguments = $"-pid:{target.Id} \"{arguments}\"";
 
-			if (waitMilliseconds > 0)
-				arguments += $" -wait:{waitMilliseconds}";
+            if (waitMilliseconds > 0)
+                arguments += $" -wait:{waitMilliseconds}";
 
-			var currentPath = Path.GetDirectoryName(Path.Combine(Assembly.GetExecutingAssembly().Location));
-			var command = Path.Combine(currentPath, "SendKeys.exe");
-			if (File.Exists(command))
-				Process.Start(new ProcessStartInfo(command, arguments) { UseShellExecute = true });
-			else
-				Console.WriteLine(command + " does not exist.");
+            var currentPath = Path.GetDirectoryName(Path.Combine(Assembly.GetExecutingAssembly().Location));
+            var command = Path.Combine(currentPath, "SendKeys.exe");
+
+            if (File.Exists(command))
+            {
+                // TODO
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    arguments = "\"" + command + "\" " + arguments;
+                    command = "mono";
+                }
+
+                Process.Start(new ProcessStartInfo(command, arguments) { UseShellExecute = true });
+            }
+            else
+            {
+                Console.WriteLine(command + " does not exist.");
+            }
 		}
 	}
 }
